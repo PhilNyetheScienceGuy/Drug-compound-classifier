@@ -1,0 +1,537 @@
+---
+title: "Drug compound classifiers"
+author: "Philip Drewniak"
+date: "17/12/2021"
+output: pdf_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#1.Introduction 
+
+
+Modern drug discovery is an expensive endeavour, with the average cost of bringing a new drug to market totalling $1.3 billion. With how laborious synthesis and safety testing can be, it is crucial that the drugs explored have the highest chance of success. To help facilitate this, modern drug approaches now use computational modelling and prediction as tools that can narrow down on drug candidates in silico, before being tested in vivo. Tools such as machine learning, which is a rapidly advancing field overall, has since become a very important tool in computer-aided drug discovery (Lo et al., 2018; Fernandex-Torras et al., 2022). Machine learning can be used to predict whether novel drugs can be curated towards existing drug targets, or whether current approved drugs can be repurposed towards targeting new diseases. Models can be used to predict a new drugs biological activity, or its physiochemical properties, whereas previously this information could only be elucidated from laboratory experiments (Vamathevan et al., 2019). 
+
+Given the fact that a chemical compounds structure entirely influences its biological properties, it is safe to assume that different drugs, targeting different proteins or cellular machinery, will have differing molecular structures. This is the basis of chemical graph theory. Chemical graphs represent atomic connectivity that can be used to calculate topological descriptors of the molecule (Lo et al., 2018). These descriptors come in several dimensions, but the most common are 2D chemical descriptors, which mainly capture the physicochemical, topological, and surface properties of the molecule. Much like how the amino acid sequence of a protein will contain crucial information towards a protein’s secondary and tertiary structure, which in turn will provide its function, the same applies to drug compounds, wherein the structure contains information that can hint at potential functions. This is where the Compound-Protein Interaction with R (Rcpi) package is useful as it contains a plethora of molecular descriptors that can be calculated for both small molecules and proteins. The Rcpi package contains the ability to calculate over 300 molecular descriptors, and 10 molecular fingerprints – these fingerprints being a succinct way of encoding the structural information of a molecule into a series of binary bits, indicating the presence or absence of certain substructures (Cao et al., 2015).  These molecular descriptors can then be used as features to train a machine learning model. With the enormous amount of data available in databanks for structures, chemical compounds can be screened via their descriptors and fingerprints, and fed into models that could reveal information quickly and cheaply. 
+
+The large amount of small molecule drugs available today can often be sorted and classified into specific classes. Antivirals and antibacterials, for example, are compounds that are used to prevent or treat viral or bacterial diseases. One can imagine that these compounds will have different targets as well. Many antivirals target a virus’s replicative abilities, either by binding to its associated polymerase or by incorporating itself into the viruses DNA; both mechanisms which achieve the inhibition of viral replication (DeClerq, 1982). Given these mechanisms, one could assume that many antiviral compounds resemble the chemical structure of nucleotides, and indeed they often do. One such recent example is the oral pill approved for treating COVID-19, molnupiravir, which is a nucleoside derivative of hydroxycytidine. Antibacterials, on the other hand, seem to have a much wider array of targets. Bacteria have much larger genomes than viruses, and so this gives rise to a larger number of proteins encoded and more complex metabolic pathways which can be targeted. Antibacterial drugs often inhibit crucial pathways in the cell, which often include cell wall, protein and nucleic acid synthesis, as well as inhibiting ATP synthase or targeting key metabolic pathways. Herein lies the classification problem. The drug classes often target different proteins, and therefore are structurally distinct from each other. They also often target multiple different proteins or pathways. Given the molecular descriptors that can be calculated from the differing drug classes, can the appropriate drug class be classified and predicted based on these features? The objective, then, was to build a suitable model that could predict whether a drug belonged to the positive class, based on the molecular descriptors derived from the chemical structures of the drugs themselves. This analysis was performed using data imported ChEMBL, an online database comprising of several millions of drugs, comprising of drug classes as organized by CHEMBL was implemented into the analysis. Two classes of drugs – antivirals and antibacterials – were imported to act as the positive classes. A third dataset, labelled as ‘others’, was imported that consisted of drugs that did not belong to the classes of antivirals and antibacterials. These drug classes involved were antithrombotic agents, antineoplastic agents, immunosuppressants, anti-inflammatories, and analgesics, among others. Using this data and the molecule descriptors calculated, the ability of the decision tree and support vector machine models were assessed in whether they could accurately predict whether a drug belonged to the positive class. 
+
+
+
+
+#2.Description of Data Set
+
+The data sets used in this analysis were fetched and downloaded from the ChEMBL database. The main data sets involved were downloaded from the CHEMBL online databank. Each data set were made up from a .csv file and a .sdf file, with the .sdf file containing the chemical formula information. The data was specifically filtered to include small molecules only, to remain consistent when calculating the molecular descriptors. From the .sdf files, and using the Rcpi package, the molecular structural information was imported into the mol object format. From this mol object, the molecular descriptors could be computed. 
+
+
+
+#3. Code Section I: Data acquisition, exploration, filtering and quality control
+
+```{r Libraries/variables, echo=FALSE}
+
+library(tidyverse)
+library(data.table)
+library(Rcpi)
+library(rJava)
+library(rcdklibs)
+library(rcdk)
+library(ape)
+library(RColorBrewer)
+library(caret)
+library(randomForest)
+library(pROC)
+
+#The vignette that was followed and slightly adapted:
+#browseVignettes("Rcpi")
+
+#Variables
+
+drug_name1 <- "antibacterial"
+drug_name2 <- "antiviral"
+drug_name3 <- "other"
+
+
+```
+
+
+```{r Data retrieval and cleaning, echo = TRUE}
+#Loading in data sets, and using the rcdk and rJava packages, to view the first 
+#molecule of the sets. Data sets were downloaded from ChEMBL, a 
+#comprehensive data bank of drug compounds. 
+#https://www.ebi.ac.uk/chembl/g/#search_results/all
+
+ab <- load.molecules(c('antibacterials.sdf'))
+    antibacterials <- read.csv('antibacterials.csv')
+    antibacterials$ID <- seq(1,nrow(antibacterials))
+    antibacterials <- antibacterials %>%
+        filter(!is.na(Molecular.Weight))
+
+av <- load.molecules(c('antivirals.sdf'))
+      antivirals <- read.csv("antiviral.csv")
+      antivirals$ID <- seq(1,nrow(antivirals))
+
+#Using rJava and a natively installed Java, you can view the molecule outside
+#the browser, just uncomment the following code.
+#Views the first molecule in the ab list
+#view.molecule.2d(ab[1])
+
+
+ot <- load.molecules('others.sdf')
+other <- read.csv("other.csv")
+    other$ID <- seq(1,nrow(other))
+
+
+
+#Obtaining molecular descriptors from the mol objects (smiles files) for 
+#each of the compound classes (antibacterial, antiviral, and other)
+
+xAB <- suppressWarnings(cbind(
+  extractDrugALOGP(ab),
+  extractDrugApol(ab),
+  extractDrugTPSA(ab),
+  extractDrugWeight(ab),
+  extractDrugZagrebIndex(ab),
+  extractDrugAromaticBondsCount(ab),
+  extractDrugHBondAcceptorCount(ab),
+  extractDrugHBondDonorCount(ab),
+  extractDrugBondCount(ab),
+  extractDrugAutocorrelationCharge(ab),
+  extractDrugRuleOfFive(ab),
+  extractDrugRotatableBondsCount(ab)
+))
+xAB$ID <- seq(1,length(ab))
+
+xAV <- suppressWarnings(cbind(
+  extractDrugALOGP(av),
+  extractDrugApol(av),
+  extractDrugTPSA(av),
+  extractDrugWeight(av),
+  extractDrugZagrebIndex(av),
+  extractDrugAromaticBondsCount(av),
+  extractDrugHBondAcceptorCount(av),
+  extractDrugHBondDonorCount(av),
+  extractDrugBondCount(av),
+  extractDrugAutocorrelationCharge(av),
+  extractDrugRuleOfFive(av),
+  extractDrugRotatableBondsCount(av)
+  ))
+xAV$ID <- seq(1,length(av))
+
+xOT <- suppressWarnings(cbind(
+  extractDrugALOGP(ot),
+  extractDrugApol(ot),
+  extractDrugTPSA(ot),
+  extractDrugWeight(ot),
+  extractDrugZagrebIndex(ot),
+  extractDrugAromaticBondsCount(ot),
+  extractDrugHBondAcceptorCount(ot),
+  extractDrugHBondDonorCount(ot),
+  extractDrugBondCount(ot),
+  extractDrugAutocorrelationCharge(ot),
+  extractDrugRuleOfFive(ot),
+  extractDrugRotatableBondsCount(ot)
+  ))
+xOT$ID <- seq(1,length(ot))
+
+
+
+#Using the left_join function, joining the two data sets created: the molecular
+#descriptors plus the loaded .csv file containing the general information for 
+#each molecule. Since both are listed by the ID's created from the appropriate 
+#length of the data frames, the data entries are matched up by their ID's. 
+group1 <- left_join(antibacterials, xAB, by ="ID")
+group1$Class <- drug_name1
+  
+group2 <- left_join(antivirals, xAV, by = "ID")
+group2$Class <- drug_name2
+
+group3 <- left_join(other, xOT, by = "ID")
+group3$Class <- drug_name3
+
+#Now combining these two databases to create data frame for ML models. 
+
+groupAB <- rbind(group1, group3)
+groupAB$ID <- seq(1,nrow(groupAB))
+groupAB <- groupAB %>%
+  mutate(Binary = str_replace_all(Class, c("antibacterial" = "0",
+                                           "other" = "1"))) %>%
+  filter((!is.na(AMR))) %>%
+  filter((!is.na(ATSc1)))
+  
+groupAV <- rbind(group2, group3)
+groupAV$ID <- seq(1,nrow(groupAV))
+groupAV <- groupAV %>%
+  mutate(Binary = str_replace_all(Class, c("antiviral" = "0",
+                                           "other" = "1"))) %>%
+  filter((!is.na(AMR))) %>%
+  filter((!is.na(ATSc1)))
+
+#Ready for model training and prediction
+
+```
+
+
+```{r Clustering, echo = TRUE}
+
+#Creating a similarity index of the similar molecules data set based on the 
+#E-state fingerprints of each molecule. 
+
+#First, creating an empty matrix to then load our similarity index matrix values 
+#into 
+simMatrix1 <- diag(length(av))
+#A nested for loop 
+for (i in 1:length(av)) {
+  for(j in i:length(av)){
+    fp1 <- extractDrugEstate(av[[i]])
+    fp2 <- extractDrugEstate(av[[j]])
+    tmp <- calcDrugFPSim(fp1, fp2, fptype = "compact", metric = "tanimoto")
+    simMatrix1[i, j] <- tmp
+    simMatrix1[j, i] <- tmp
+  }
+}
+
+simMatrix2 <- diag(length(ab))
+for (i in 1:length(ab)) {
+  for(j in i:length(ab)){
+    fp1 <- extractDrugEstate(ab[[i]])
+    fp2 <- extractDrugEstate(ab[[j]])
+    tmp <- calcDrugFPSim(fp1, fp2, fptype = "compact", metric = "tanimoto")
+    simMatrix2[i, j] <- tmp
+    simMatrix2[j, i] <- tmp
+  }
+}
+
+
+#Hierarchical clustering using ward.D method. 
+
+cyt.hcAV <- hclust(as.dist(1 - simMatrix1), method = "ward.D")
+cyt.hcAB <- hclust(as.dist(1 - simMatrix2), method = "ward.D")
+
+clusterAV <- cutree(cyt.hcAV, 5)
+clusterAB <- cutree(cyt.hcAB, 5)
+
+pal5 <- brewer.pal(5, "Set1")
+pal10 <- brewer.pal(5, "Set3")
+par(mfrow = c(1,2))
+
+avClust <- (plot(as.phylo(cyt.hcAV),
+  type = "fan",
+  tip.color = pal5[clusterAV],
+  label.offset = 0.1, cex = 0.5,
+  main = "Clustering of antiviral drug compounds", cex.main = 0.8
+))
+
+aBClust <- (plot(as.phylo(cyt.hcAB),
+  type = "fan",
+  tip.color = pal5[clusterAB],
+  label.offset = 0.1, cex = 0.3,
+  main = "Clustering of antibacterial drug compounds", cex.main = 0.8
+))
+
+
+```
+
+
+Figure 1
+
+
+``` {r Feature plot, echo = TRUE}
+
+group <- rbind(group1, group2, group3)
+freqplot <- featurePlot(x = group[,33:50], 
+                  y = as.factor(group$Class), 
+                  plot = "box",
+                           strip=strip.custom(par.strip.text=list(cex=.8)),
+                           scales = list(y = list(relation="free"),
+                                         x = list(rot = 90)),
+                            layout = c(6,3 ),
+                           auto.key=list(space="top", columns=2, title= ""))
+freqplot
+
+```
+
+Figure 2
+
+
+
+```{r Ridge plots, echo = TRUE}
+
+library(ggridges)
+library(cowplot)
+gg.df <- group[,33:50]
+gg.df$Class <- group$Class
+
+
+#From the boxplot created, I then narrowed down on the features which seemed
+#to have the most spread between classes and values, and plotted these
+#features on density plots to further illustrate any differences
+#in the values between the drug classes
+gg1 <- ggplot(gg.df, aes(x = ALogP, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, 
+                      quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "none")  
+gg2 <- ggplot(gg.df, aes(x = nHBDon, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, 
+                      quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "right")  + labs(y = "")
+gg3 <- ggplot(gg.df, aes(x = nRotB, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "none") 
+gg4 <- ggplot(gg.df, aes(x = nHBAcc, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, 
+                      quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "none")  + labs(y = "")
+gg5 <- ggplot(gg.df, aes(x = TopoPSA, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, 
+                      quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "none") 
+gg6 <- ggplot(gg.df, aes(x = nAromBond, y = Class, fill = Class))+
+  geom_density_ridges(scale = 0.9, 
+                      quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  theme(legend.position = "none")  + labs(y = "")
+
+
+plot_grid(gg1,gg2,gg3,gg4,gg5,gg6,
+          nrow = 3, 
+          ncol = 2, 
+          label_size = 12)
+
+
+```
+
+
+
+
+Figure 3
+
+
+
+
+#4. Main Software Tools description 
+
+The main software tools used in this script were the following packages: Rcpi, caret, randomForest, pROC, and tidyverse. The Rcpi package was used to generate all of the molecular descriptors from the mol objects, which were derived from the .sdf files. The main software tools were then the random forest and support vector machine models. Both of these models were compared in terms of their accuracy and their AUC values from their respective ROC plots. SVM is a non-probabilistic binary linear classifier, and is a type of supervised machine learning. Likewise with the random forest model, it is also a supervised machine learning algorithm, however with the distinction that it uses multiple decision trees when being trained, and the predicted output is the class selected by the most trees. In terms of the Rcpi package vignette, there were several sections that were built upon from this. The computing of the molecular descriptors, clustering of the compounds, and the specific use of the SVM radial basis kernel function for prediction, were adapted from the vignette. The data sets from the vignette were not used.  All other coding sections, including the plots and random forest models were entirely separate from the vignette.  
+
+
+#5. Code Section II - Main Analysis
+
+```{r Training and Validation + randomForest model, echo=TRUE}
+
+#Training and validation data sets for Antibacterials
+set.seed(102)
+rf_validation <- groupAB %>%
+  sample_frac(0.30)
+rf_training <- anti_join(groupAB, rf_validation, by = "ID")
+
+#Training and validation data sets for Antibacterials
+set.seed(111)
+rf_validation2 <- groupAV %>%
+  sample_frac(0.30)
+rf_training2 <- anti_join(groupAV, rf_validation2, by = "ID")
+
+#Check
+table(rf_training$Class)
+table(rf_training2$Class)
+
+#Creating randomForest model and then predicting
+#1st model: Antibacterials
+set.seed(54)
+rf_classify <- randomForest::randomForest(x = rf_training[, 33:50], 
+                                          y = as.factor(rf_training$Class), 
+                                          ntree = 100, importance = TRUE)
+print(rf_classify)
+
+rf_predict <- predict(rf_classify, rf_validation[, 33:50])
+rf_predict_prob <- predict(rf_classify, rf_validation[, 33:50], 
+                           type = 'prob')
+
+#2nd model: Antivirals
+rf_classify2 <- randomForest::randomForest(x = rf_training2[, 33:50], 
+                                           y = as.factor(rf_training2$Class), 
+                                           ntree = 100, importance = TRUE)
+print(rf_classify2)
+
+rf_predict2 <- predict(rf_classify2, rf_validation2[, 33:50])
+rf_predict_prob2 <- predict(rf_classify2, rf_validation2[, 33:50], 
+                            type = 'prob')
+
+par(mfrow = c(1,2))
+table(observed = rf_validation$Class, predicted = rf_predict)
+table(observed = rf_validation2$Class, predicted = rf_predict2)
+
+
+```
+
+```{r SVM Radial Basis Kernel model}
+
+ctrl <- trainControl(
+  method = "cv", number = 5, repeats = 10,
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary
+)
+
+#Creating SVM model on training data
+#1st model: Antibacterials
+set.seed(39)
+svm.fit1 <- train(
+  Class~ALogP+ALogp2+AMR+apol+TopoPSA+MW+Zagreb+nAromBond+nHBAcc+
+    nHBDon+nB+ATSc1+ATSc2+ATSc3+ATSc4+ATSc5+LipinskiFailures+nRotB, 
+  rf_training,
+  method = "svmRadial", trControl = ctrl,
+  metric = "ROC", preProc = c("center", "scale")
+)
+
+print(svm.fit1)
+svm.predict <- predict(svm.fit1, newdata = rf_validation, type = "prob")
+
+#2nd model: Antivirals
+set.seed(39)
+svm.fit2 <- train(
+  Class~ALogP+ALogp2+AMR+apol+TopoPSA+MW+Zagreb+nAromBond+nHBAcc+
+    nHBDon+nB+ATSc1+ATSc2+ATSc3+ATSc4+ATSc5+LipinskiFailures+nRotB, 
+  rf_training2,
+  method = "svmRadial", trControl = ctrl,
+  metric = "ROC", preProc = c("center", "scale")
+)
+
+print(svm.fit2)
+svm.predict2 <- predict(svm.fit2, newdata = rf_validation2, type = "prob")
+
+#Creating confusion matrices for both predictions
+#First, taking the maximum value of each row and assigning it to one of the 
+#classes. This forms our prediction data frame which can be compared to the 
+#actual values to create our confusion matrix
+
+#Antibacterial
+prediction <- max.col(svm.predict)
+prediction <- as.data.frame(prediction)
+prediction <- prediction %>%
+  mutate(Class = str_replace_all(max.col(svm.predict), 
+                                 c("1" = "antibacterial","2" = "other")))
+
+#Antiviral
+prediction2 <- max.col(svm.predict2)
+prediction2 <- as.data.frame(prediction2)
+prediction2 <- prediction2 %>%
+  mutate(Class = str_replace_all(max.col(svm.predict2), 
+                                 c("1" = "antiviral","2" = "other")))
+
+#Using the caret package to construct a confusion matrix from the predicted 
+#values
+prediction <- as.factor(prediction$Class)
+cf1 <- confusionMatrix(prediction, as.factor(rf_validation$Class))
+
+prediction2 <- as.factor(prediction2$Class)
+cf2 <- confusionMatrix(prediction2, as.factor(rf_validation2$Class))
+
+print(cf1)
+print(cf2)
+
+```
+
+
+``` {r Four Fold plot, echo = TRUE}
+
+
+par(mfrow = c(1,2))
+four.plot <- fourfoldplot(cf1$table, 
+                          color = c('navy','lightgreen'), 
+                          conf.level = 0.95, 
+                          margin = 2, 
+                          main = "Antibacterials CM")
+four.plot2 <- fourfoldplot(cf2$table, 
+                          color = c('navy','lightgreen'), 
+                          conf.level = 0.95, 
+                          margin = 2, 
+                          main = "Antivirals CM")
+
+```
+
+
+Figure 4
+
+
+
+
+``` {r ROC curves, echo = TRUE}
+
+rf_predict_prob <- as.data.frame(rf_predict_prob)
+rf_predict_prob2 <- as.data.frame(rf_predict_prob2)
+
+plot(smooth(roc(rf_validation$Class, svm.predict$antibacterial)), 
+     col = 1, grid = TRUE, main = "ROC of SVM and random forest model predictions")
+plot(smooth(roc(rf_validation$Class, rf_predict_prob$antibacterial)), 
+     col = 2, grid = TRUE, add = TRUE)
+plot(smooth(roc(rf_validation2$Class, svm.predict2$antiviral)), 
+     col = 3, grid = TRUE, add = TRUE)
+plot(smooth(roc(rf_validation2$Class, rf_predict_prob2$antiviral)), 
+     col = 4, grid = TRUE, add = TRUE)
+legend("bottomright", 
+       legend = c('SVM Antibacterial', 'rf Antibacterial', 
+                  'SVM Antiviral', 'rf Antiviral'), 
+       fill = c('1','2','3','4'))
+
+
+
+rf.roc.AB <- roc(rf_validation$Class, rf_predict_prob$antibacterial)
+print(auc(rf.roc.AB))
+
+rf.roc.AV <- roc(rf_validation2$Class, rf_predict_prob2$antiviral)
+print(auc(rf.roc.AV))
+
+auc(roc(rf_validation$Class, svm.predict$antibacterial))
+auc(roc(rf_validation2$Class, svm.predict2$antiviral))
+
+
+```
+
+
+
+Figure 5
+
+
+#6. Results and Discussion 
+
+This analysis involving the use of machine learning models to accurately predict drug classes led to very interesting results. Firstly, once the molecular descriptors were calculated of the three drug classes, the data distribution was explored. The antiviral and antibacterial drugs were clustered hierarchically based on their Electrotopological state index (E-state) fingerprints (Hall and Mohney, 1991). This revealed that there seemed to be a greater number of larger clusters within the antibacterial compounds, and less larger clusters within the antivirals (Figure 1). This makes sense given the previously established idea that antibacterial drugs have a wider range of molecular targets within the cell, so their structures might then differ more than antivirals, which have less of a variety of targets and may be more structurally homogenous. Figure 2 shows a boxplot highlighting all of the molecular descriptors used as features in the models and shows the distribution of the values and the mean. Between the three classes, many of the features do not have a large disparity. Figure 3 however, focuses on six selected features: ALogP, number of H-bond donor atoms, non-rotatable bonds, number of H-bond acceptor atoms, topological polar surface area, and number of aromatic bonds. Of these descriptors, ALogP may be the only descriptor that is not obvious if one is not very familiar with organic chemistry, but essentially it is a measure of a molecules hydrophobicity, which is an important metric for molecules in determining whether they will be able to dissolve in the bloodstream or not (Tarcsay and Keseru, 2013). The density curves show the mean as well as the distributions, and for some of these features, greater disparity can be resolved, especially between the antibacterial and other drug classes. However, the antiviral class shows the most similarity with the other drugs class, which was clearly reflected in the model performances. Finally, the random forest and support vector machine (SVM) models were trained and used to predict the positive classes – antibacterials and antivirals – amongst the negative class. The results varied among model as well as drug type. In figure 4, the four-fold plot shows the predictions of the SVM model, with the antibacterial predictions having an acceptable true-positive rate, while the antiviral predictions had many more false-positives. 
+
+The main conclusion from this analysis comes from the receiver operating curves calculated from the prediction results of the models. All four predictions were plotted and the area under the curve (AUC) was calculated for each to determine the model performance. The AUC is a measure for how well the model is performing. An AUC of 0.5 represents the model having no discriminatory ability, and that the results achieved could have been achieved just as well by chance. AUC values of 0.7 – 0.8 are considered acceptable, while values above 0.9 are outstanding (Mandrekar, 2010). The AUC for the random forest models for the antibacterial and antiviral classes were 0.925 and 0.856, respectively. Meanwhile, for the SVM model, the AUC values for the antibacterial and antiviral classes were 0.95 and 0.84, respectively as well. These results highlight how well the models performed for identifying the antibacterial drug classes in the prediction data sets, and how the models were less accurate for the antiviral class. As well, it seems the difference in model mattered little for both classes, with the SVM model performing slightly better on both cases. This discrepancy between classes shows that different descriptors may need to be used for the antiviral class, as there may not be enough differences in the values between the antiviral class and the other drugs class. This further highlights a large caveat within this study. Since the Rcpi pckage contains many descriptors, and only 16 were used in training these models, further work can be done to incorporate more or all the descriptors within this package. Further feature refining can be done to only select the descriptors that assist in accurate classification and remove features that deter this. This work would provide a more robust model and could decrease the amount of false positives that arise from the predictions. 
+
+This leads into further work that could have been achieved if given more time towards this analysis. As previously said, more descriptors can be included in the analysis, as there are many that were not initially used. The optimal selection of molecular descriptors can also be done using a random forest model (Cano et al., 2017). In Cano et al, the authors used rf in a pre-selection stage, in which the model selected for the best descriptors. They found that this method outperformed manually selecting the features themselves. This could also be tried in this work, as finding the best descriptors manually may not be the most efficient or accurate method. As well, the analysis only focused mainly on 2D descriptors, but the Rcpi package can also calculate several 3D descriptors, which may be more robust in identifying differences between classes of molecules. Another step could also be incorporating the molecular fingerprints, as there are 10 of these within the package. Finally, one last improvement to this analysis, and one that would require quite a bit more work, would be further specifying the classification model. An example of this, would be that from within the antibacterial class of compounds, these drugs would be further separated based on the specific protein or target they interact with. This would give an even higher separation, given that within just the antibacterial drugs class alone, there is a variety of compounds that target different proteins, and thus have different structures. A corollary to this idea, would be that if this model is accurate enough and can predict antibacterial compounds to the resolution of its target, then this model could be applied to a data set of completely new drugs, and new combinations of antibacterial compounds could be predicted. This could lead to new antibacterial drugs that could be used as promising hits, and further refined and experimented on in chemistry and molecular biology drug discovery labs. 
+
+
+##Reflection paragraph
+
+This final project for BINF*6210 was very interesting and quite a bit of fun to put together. I enjoyed working with a different kind of data, and putting to use the data exploration and filtering skills I have learnt towards this. I especially also enjoyed revisiting some of the machine learning concepts touched on in this class, and as well as expanding into other types of models and software tools that can assist with classification problems. Overall, I gained invaluable experience that I hope to take with me in the future towards a career that encompasses many of the analytical skills I have acquired by taking this class. 
+
+
+#7. Acknowledgements
+
+I conversed with Dr. Sally Adamowicz and confirmed that my project idea was indeed suitable for this assignment. I explained that there was a vignette that I could follow, and parts of that vignette were incorporated into this script, although with differing data sets and overall analysis. Sally had also helped with refining the overall idea and what kind of biological question I wanted to ask with these primarily chemically based data sets.
+
+
+
+#8. References
+
+
+GitHub repository link: https://github.com/PhilNyetheScienceGuy/Drug-compound-classifier
+
+1. 	Lo, Y. C., Rensi, S. E., Torng, W., and Altman, R. B. (2018) Machine learning in chemoinformatics and drug discovery. Drug Discov. Today. 23, 1538–1546
+2. 	Fernández-Torras, A., Comajuncosa-Creus, A., Duran-Frigola, M., and Aloy, P. (2022) Connecting chemistry and biology through molecular descriptors. Curr. Opin. Chem. Biol. 66, 102090
+3. 	Vamathevan, J., Clark, D., Czodrowski, P., Dunham, I., Ferran, E., Lee, G., Li, B., Madabhushi, A., Shah, P., Spitzer, M., and Zhao, S. (2019) Applications of machine learning in drug discovery and development. Nat. Rev. Drug Discov. 18, 463–477
+4. 	Cao, D. S., Xiao, N., Xu, Q. S., and Chen, A. F. (2015) Rcpi: R/Bioconductor package to generate various descriptors of proteins, compounds and their interactions. Bioinformatics. 31, 279–281
+5. 	De Clercq, E. (1982) Specific targets for antiviral drugs. Biochem. J. 205, 1–13
+6. 	Hall, L. H., Mohney, B., and Kier, L. B. (1991) The Electrotopological State: An Atom Index for QSAR. Quant. Struct. Relationships. 10, 43–51
+7. 	Mandrekar, J. N. (2010) Receiver operating characteristic curve in diagnostic test assessment. J. Thorac. Oncol. 5, 1315–1316
+8. 	Tarcsay, Á., and Keserú, G. M. (2013) Contributions of molecular properties to drug promiscuity. J. Med. Chem. 56, 1789–1795
+9. 	Cano, G., Garcia-Rodriguez, J., Garcia-Garcia, A., Perez-Sanchez, H., Benediktsson, J. A., Thapa, A., and Barr, A. (2017) Automatic selection of molecular descriptors using random forest: Application to drug discovery. Expert Syst. Appl. 72, 151–159
+
+
